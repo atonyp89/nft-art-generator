@@ -14,12 +14,53 @@ const mergeImages = require('merge-images');
 const { Image, Canvas } = require('canvas');
 const ImageDataURI = require('image-data-uri');
 
+/* Index
+0 - Accesories
+1 - Back Hand
+2 - Background
+3 - Body
+4 - Carry On
+5 - Chair
+6 - Eyes
+7 - Front Hand
+8 - Hair
+9 - Head Type
+10 - Headgear
+11 - Headphone
+12 - Headphone Sticker
+13 - Mouth
+14 - Special
+15 - Watch
+*/
+
+let HEADGEAR_ORDER = 13;
+let HAIR_ORDER = 10;
+let ACCESORIES_ORDER = 9;
+let EYES_ORDER = 8;
+
 //SETTINGS
 let basePath;
 let outputPath;
 let traits;
 let traitsToSort = [];
-let order = [];
+let order = [
+  2,  // Background
+  14, // Special
+  1,  // Back Hand
+  15, // Watch
+  4,  // Carry On
+  3,  // Body
+  5,  // Chair
+  9,  // Head Type
+  6,  // Eyes
+  0,  // Accesories
+  8,  // Hair
+  7,  // Front Hand
+  13, // Mouth
+  10, // Headgear
+  11, // Headphone
+  12  // Headphone sticker
+];
 let weights = {};
 let names = {};
 let weightedTraits = [];
@@ -80,7 +121,7 @@ async function main() {
   await sleep(2);
   loadingDirectories.succeed();
   loadingDirectories.clear();
-  await traitsOrder(true);
+  // await traitsOrder(true);
   await customNamesPrompt();
   await asyncForEach(traits, async trait => {
     await setNames(trait);
@@ -328,10 +369,18 @@ async function setWeights(trait) {
       type: 'input',
       name: names[file] + '_weight',
       message: 'How many ' + names[file] + ' ' + trait + ' should there be?',
-      default: parseInt(Math.round(10000 / files.length)),
+      default: parseInt(Math.round(1000 / files.length)),
     });
   });
   const selectedWeights = await inquirer.prompt(weightPrompt);
+  console.log(selectedWeights)
+
+  // const data = await readFile('weight_config.json')
+  // weigthConfig = JSON.parse(data.toString());
+  // const selectedWeights = weigthConfig[trait];
+  // console.log(trait)
+  // console.log(selectedWeights)
+
   files.forEach((file, i) => {
     weights[file] = selectedWeights[names[file] + '_weight'];
   });
@@ -363,17 +412,182 @@ async function generateWeightedTraits() {
 async function generateImages() {
   let noMoreMatches = 0;
   let images = [];
-  let id = 0;
+  let id = 10000;
   await generateWeightedTraits();
   if (config.deleteDuplicates) {
     while (!Object.values(weightedTraits).filter(arr => arr.length == 0).length && noMoreMatches < 20000) {
       let picked = [];
+      var pickedImgs = []
+      // Modify order for certain trait variant
+
+      var skippedHat = false
+      var reOrderHeadphone = false
+      var reOrderBaldHair = false
+      var moveScarDown = false
+      var moveLightningEyeTop = false
+
       order.forEach(id => {
+        var trait = traits[id];
+
+        if (trait == "Headgear" && skippedHat) {
+          // console.log("Skipping Hat")
+          return
+        }
+
         let pickedImgId = pickRandom(weightedTraits[id]);
         picked.push(pickedImgId);
         let pickedImg = weightedTraits[id][pickedImgId];
-        images.push(basePath + traits[id] + '/' + pickedImg);
+        pickedImgs.push(pickedImg)
+
+        // check if hair is possible to put hat in
+        if (trait == "Hair") {
+          if (pickedImg.includes("Hat") == false) {
+            skippedHat = true
+          }
+
+          if (pickedImg.includes("Bald") == true ||
+          pickedImg.includes("Dreads") == true) {
+            reOrderBaldHair = true
+          }
+        }
+
+        // swap order between Headgear and Headphone
+        if (trait == "Headgear") {
+          if (pickedImg.includes("BELOW") == false) {
+            reOrderHeadphone = true
+          }
+        }
+
+        if (trait == "Accesories") {
+          if (pickedImg.includes("Scar") == true) {
+            moveScarDown = true
+          }
+        }
+
+        if (trait == "Eyes") {
+          if (
+            pickedImg.includes("Lightning") == true ||
+            pickedImg.includes("Fire") == true
+          ) {
+            moveLightningEyeTop = true
+          }
+        }
+
+        images.push(basePath + trait + '/' + pickedImg);
       });
+
+      // move headphone & sticker to below headgear
+      if (reOrderHeadphone == true) {
+        var traitOrder = HEADGEAR_ORDER
+        var headgearTrait = images[traitOrder]
+        var headphoneTrait = images[traitOrder+1]
+        var headphoneStickerTrait = images[traitOrder+2]
+
+        images[traitOrder] = headphoneTrait
+        images[traitOrder+1] = headphoneStickerTrait
+        images[traitOrder+2] = headgearTrait
+      }
+
+      var accessoryOrder = ACCESORIES_ORDER;
+      var eyesOrder = EYES_ORDER;
+
+      // TODO: problem with Bald hair & Scar
+      if (moveScarDown == true) {
+        var accessoryTrait = images[accessoryOrder]
+
+        var eyeTrait = images[eyesOrder]
+
+        images[accessoryOrder] = eyeTrait
+        images[eyesOrder] = accessoryTrait
+
+        var tmp = accessoryOrder
+        accessoryOrder = eyesOrder
+        eyesOrder = tmp
+      }
+
+      // move accessories above hair
+      if (reOrderBaldHair == true) {
+        var traitOrder = HAIR_ORDER
+        var hairTrait = images[traitOrder]
+        var accessoryTrait = images[accessoryOrder]
+
+        images[traitOrder] = accessoryTrait
+        images[accessoryOrder] = hairTrait
+
+        // update new order
+        accessoryOrder = traitOrder
+      }
+
+      if (moveLightningEyeTop == true) {
+        var traitOrder = eyesOrder
+        var eyeTrait = images[traitOrder]
+        
+        images.splice(traitOrder, 1);
+        images.push(eyeTrait)
+      }
+
+      // filter conflicting images here
+      // Mask <> *Blindfold Accessory
+      if (pickedImgs.includes("Masked Mouth.png") &&
+        (
+          pickedImgs.includes("Brown Camo Blindfold.png") || 
+          pickedImgs.includes("Green Camo Blindfold.png") ||
+          pickedImgs.includes("Bleedinig Eye Patch.png")
+          )
+      ) {
+        // console.log("Conflicting ", pickedImgs)
+        // ignore
+        noMoreMatches++;
+        images = [];
+        continue;
+      }
+
+      // Lightning Eye <> *Blindfold Accessory
+      if (
+        (
+          pickedImgs.includes("Front Eyes Lightning.png") ||
+          pickedImgs.includes("Fire Eyes.png")
+        ) &&
+        (
+          pickedImgs.includes("Bleedinig Eye Patch.png") || 
+          pickedImgs.includes("Brown Camo Blindfold.png") ||
+          pickedImgs.includes("Cyclops Eye Band.png") ||
+          pickedImgs.includes("Green Camo Blindfold.png") ||
+          pickedImgs.includes("Japan Eyeband.png") ||
+          pickedImgs.includes("Japan Eyepatch.png") ||
+          pickedImgs.includes("Peace Sign Eyepatch.png") ||
+          pickedImgs.includes("Pirate Eyepatch.png")
+        )
+      ) {
+        // console.log("Conflicting ", pickedImgs)
+
+         // ignore
+         noMoreMatches++;
+         images = [];
+         continue;
+      }
+
+      // Reorder layer if having special traits
+      // Add front image special
+      // Autumn
+      // Greenleaves
+      // Sakura
+      // Smoke
+      if (pickedImgs.includes("Autumn.png")) {
+        images.push(`./special_front/Autumn_front.png`);
+      }
+
+      if (pickedImgs.includes("Greenleaves.png")) {
+        images.push(`./special_front/Greenleaves_front.png`);
+      }
+
+      if (pickedImgs.includes("Sakura.png")) {
+        images.push(`./special_front/Sakura_front.png`);
+      }
+
+      if (pickedImgs.includes("Smoke.png")) {
+        images.push(`./special_front/Smoke_front.png`);
+      }
 
       if (existCombination(images)) {
         noMoreMatches++;
@@ -385,6 +599,7 @@ async function generateImages() {
           remove(weightedTraits[id], picked[i]);
         });
         seen.push(images);
+        // console.log(images)
         const b64 = await mergeImages(images, { Canvas: Canvas, Image: Image });
         await ImageDataURI.outputFile(b64, outputPath + `${id}.png`);
         images = [];
